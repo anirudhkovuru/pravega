@@ -64,6 +64,9 @@ import io.pravega.controller.stream.api.grpc.v1.Controller;
 import io.pravega.controller.stream.api.grpc.v1.Controller.ScaleResponse;
 import io.pravega.controller.stream.api.grpc.v1.Controller.ScaleResponse.ScaleStreamStatus;
 import io.pravega.controller.stream.api.grpc.v1.Controller.UpdateStreamStatus;
+import io.pravega.controller.stream.api.grpc.v1.Controller.RemoveSubscriberStatus;
+import io.pravega.controller.stream.api.grpc.v1.Controller.AddSubscriberStatus;
+import io.pravega.controller.stream.api.grpc.v1.Controller.UpdateSubscriberStatus;
 import io.pravega.controller.task.EventHelper;
 import io.pravega.controller.task.KeyValueTable.TableMetadataTasks;
 import io.pravega.controller.util.Config;
@@ -317,6 +320,135 @@ public abstract class StreamMetadataTasksTest {
         // execute the event again. It should complete without doing anything. 
         updateStreamTask.execute(event).join();
         assertEquals(State.ACTIVE, streamStorePartialMock.getState(SCOPE, stream1, true, null, executor).join());
+    }
+
+    @Test(timeout = 30000)
+    public void addSubscriberTest() throws InterruptedException, ExecutionException {
+        // add a new subscriber - positive case
+        String subscriber1 = "subscriber1";
+        Controller.AddSubscriberStatus.Status addStatus = streamMetadataTasks.addSubscriber(SCOPE, stream1, subscriber1, null).get();
+        assertEquals(Controller.AddSubscriberStatus.Status.SUCCESS, addStatus);
+
+        List<String> allSubscribers = streamMetadataTasks.listSubscribers(SCOPE, stream1, null).get().getSubscribersList();
+        assertEquals(1, allSubscribers.size());
+
+        String subscriber2 = "subscriber2";
+        addStatus = streamMetadataTasks.addSubscriber(SCOPE, stream1, subscriber2, null).get();
+        assertEquals(Controller.AddSubscriberStatus.Status.SUCCESS, addStatus);
+
+        String subscriber3 = "subscriber3";
+        addStatus = streamMetadataTasks.addSubscriber(SCOPE, stream1, subscriber3, null).get();
+        assertEquals(Controller.AddSubscriberStatus.Status.SUCCESS, addStatus);
+
+        allSubscribers = streamMetadataTasks.listSubscribers(SCOPE, stream1, null).get().getSubscribersList();
+        assertEquals(3, allSubscribers.size());
+        assertTrue(allSubscribers.contains(subscriber1));
+        assertTrue(allSubscribers.contains(subscriber2));
+        assertTrue(allSubscribers.contains(subscriber3));
+
+        // Add subscriber with same name
+        addStatus = streamMetadataTasks.addSubscriber(SCOPE, stream1, subscriber2, null).get();
+        assertEquals(Controller.AddSubscriberStatus.Status.SUBSCRIBER_EXISTS, addStatus);
+
+        // Add subscriber when stream/scope does not exist
+        addStatus = streamMetadataTasks.addSubscriber(SCOPE, "nostream", "subscriber4", null).get();
+        assertEquals(Controller.AddSubscriberStatus.Status.STREAM_NOT_FOUND, addStatus);
+    }
+
+    @Test(timeout = 30000)
+    public void removeSubscriberTest() throws InterruptedException, ExecutionException {
+        // add a new subscriber - positive case
+        String subscriber1 = "subscriber1";
+        AddSubscriberStatus.Status addStatus = streamMetadataTasks.addSubscriber(SCOPE, stream1, subscriber1, null).get();
+        assertEquals(Controller.AddSubscriberStatus.Status.SUCCESS, addStatus);
+
+        String subscriber2 = "subscriber2";
+        addStatus = streamMetadataTasks.addSubscriber(SCOPE, stream1, subscriber2, null).get();
+        assertEquals(Controller.AddSubscriberStatus.Status.SUCCESS, addStatus);
+
+        String subscriber3 = "subscriber3";
+        addStatus = streamMetadataTasks.addSubscriber(SCOPE, stream1, subscriber3, null).get();
+        assertEquals(Controller.AddSubscriberStatus.Status.SUCCESS, addStatus);
+
+        List<String> allSubscribers = streamMetadataTasks.listSubscribers(SCOPE, stream1, null).get().getSubscribersList();
+        assertEquals(3, allSubscribers.size());
+        assertTrue(allSubscribers.contains(subscriber1));
+        assertTrue(allSubscribers.contains(subscriber2));
+        assertTrue(allSubscribers.contains(subscriber3));
+
+        // Remove subscriber
+        RemoveSubscriberStatus.Status removeStatus = streamMetadataTasks.removeSubscriber(SCOPE, stream1, subscriber2, null).get();
+        assertEquals(RemoveSubscriberStatus.Status.SUCCESS, removeStatus);
+
+        // Remove subscriber from non-existing stream
+        removeStatus = streamMetadataTasks.removeSubscriber(SCOPE, "nostream", subscriber2, null).get();
+        assertEquals(RemoveSubscriberStatus.Status.STREAM_NOT_FOUND, removeStatus);
+
+        // Remove non-existing subscriber from stream
+        removeStatus = streamMetadataTasks.removeSubscriber(SCOPE, stream1, "subscriber4", null).get();
+        assertEquals(RemoveSubscriberStatus.Status.SUBSCRIBER_NOT_FOUND, removeStatus);
+    }
+
+    @Test(timeout = 30000)
+    public void getSubscribersForStreamTest() throws InterruptedException, ExecutionException {
+        // subscribers for non-existing stream
+        List<String> allSubscribers = streamMetadataTasks.listSubscribers(SCOPE, "stream2", null).get().getSubscribersList();
+        assertEquals(0, allSubscribers.size());
+
+        // no subscribers found for existing Stream
+        allSubscribers = streamMetadataTasks.listSubscribers(SCOPE, stream1, null).get().getSubscribersList();
+        assertEquals(0, allSubscribers.size());
+
+        // add a new subscribers - positive case
+        String subscriber1 = "subscriber1";
+        AddSubscriberStatus.Status addStatus = streamMetadataTasks.addSubscriber(SCOPE, stream1, subscriber1, null).get();
+        assertEquals(Controller.AddSubscriberStatus.Status.SUCCESS, addStatus);
+
+        String subscriber2 = "subscriber2";
+        addStatus = streamMetadataTasks.addSubscriber(SCOPE, stream1, subscriber2, null).get();
+        assertEquals(Controller.AddSubscriberStatus.Status.SUCCESS, addStatus);
+
+        String subscriber3 = "subscriber3";
+        addStatus = streamMetadataTasks.addSubscriber(SCOPE, stream1, subscriber3, null).get();
+        assertEquals(Controller.AddSubscriberStatus.Status.SUCCESS, addStatus);
+
+        allSubscribers = streamMetadataTasks.listSubscribers(SCOPE, stream1, null).get().getSubscribersList();
+        assertEquals(3, allSubscribers.size());
+        assertTrue(allSubscribers.contains(subscriber1));
+        assertTrue(allSubscribers.contains(subscriber2));
+        assertTrue(allSubscribers.contains(subscriber3));
+    }
+
+    @Test(timeout = 30000)
+    public void updateSubscriberStreamCutTest() throws InterruptedException, ExecutionException {
+        String subscriber1 = "subscriber1";
+        AddSubscriberStatus.Status addStatus = streamMetadataTasks.addSubscriber(SCOPE, stream1, subscriber1, null).get();
+        assertEquals(Controller.AddSubscriberStatus.Status.SUCCESS, addStatus);
+
+        String subscriber2 = "subscriber2";
+        addStatus = streamMetadataTasks.addSubscriber(SCOPE, stream1, subscriber2, null).get();
+        assertEquals(Controller.AddSubscriberStatus.Status.SUCCESS, addStatus);
+
+        List<String> allSubscribers = streamMetadataTasks.listSubscribers(SCOPE, stream1, null).get().getSubscribersList();
+        assertEquals(2, allSubscribers.size());
+        assertTrue(allSubscribers.contains(subscriber1));
+        assertTrue(allSubscribers.contains(subscriber2));
+
+        ImmutableMap<Long, Long> streamCut1 = ImmutableMap.of(0L, 10L, 1L, 10L);
+        UpdateSubscriberStatus.Status updateStatus = streamMetadataTasks.updateSubscriberStreamCut(SCOPE, stream1, subscriber1,
+                                                                                            streamCut1, null).get();
+        assertEquals(UpdateSubscriberStatus.Status.SUCCESS, updateStatus);
+
+        updateStatus = streamMetadataTasks.updateSubscriberStreamCut(SCOPE, stream1, subscriber2, streamCut1, null).get();
+        assertEquals(UpdateSubscriberStatus.Status.SUCCESS, updateStatus);
+
+        // update non-existing stream
+        updateStatus = streamMetadataTasks.updateSubscriberStreamCut(SCOPE, "nostream", subscriber2, streamCut1, null).get();
+        assertEquals(UpdateSubscriberStatus.Status.STREAM_NOT_FOUND, updateStatus);
+
+        // update non-existing subscriber
+        updateStatus = streamMetadataTasks.updateSubscriberStreamCut(SCOPE, stream1, "nosubscriber", streamCut1, null).get();
+        assertEquals(UpdateSubscriberStatus.Status.SUBSCRIBER_NOT_FOUND, updateStatus);
     }
 
     @Test(timeout = 30000)

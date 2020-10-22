@@ -9,6 +9,7 @@
  */
 package io.pravega.controller.store.stream;
 
+import com.google.common.collect.ImmutableMap;
 import io.pravega.client.stream.StreamConfiguration;
 import io.pravega.controller.store.Version;
 import io.pravega.controller.store.VersionedMetadata;
@@ -25,6 +26,7 @@ import io.pravega.controller.store.stream.records.StreamCutReferenceRecord;
 import io.pravega.controller.store.stream.records.StreamSegmentRecord;
 import io.pravega.controller.store.stream.records.StreamTruncationRecord;
 import io.pravega.controller.store.stream.records.WriterMark;
+import io.pravega.controller.store.stream.records.StreamSubscriber;
 
 import java.util.AbstractMap.SimpleEntry;
 import java.util.List;
@@ -107,6 +109,41 @@ interface Stream {
      * @return current stream configuration.
      */
     CompletableFuture<VersionedMetadata<StreamConfigurationRecord>> getVersionedConfigurationRecord();
+
+    /**
+     * Create subscribers record for storing metadata about Stream Subscribers.
+     * Also add this new Subscriber to the Record.
+     * @param subscriber first subscriber to be added the SubscribersRecord in Stream Metadata.
+     * @return future of operation.
+     */
+    CompletableFuture<Void> createSubscriber(String subscriber);
+
+    /**
+     * Fetches the record corresponding to the subscriber
+     * @return record holding information about this subscriber for the Stream.
+     */
+    CompletableFuture<VersionedMetadata<StreamSubscriber>> getSubscriberRecord(String subscriber);
+
+    /**
+     * Fetches names for all subscribers of the Stream
+     * @return iterator to iterate over all subscribers for the Stream.
+     */
+    CompletableFuture<List<String>> listSubscribers();
+
+    /**
+     * Update subscribers record for the Stream.
+     * @param subscriber  subscriber to be added/updated.
+     * @param streamCut  truncation streamcut for subscriber to be added/updated.
+     * @return future of operation.
+     */
+    CompletableFuture<Void> updateSubscriberStreamCut(final String subscriber, final ImmutableMap<Long, Long> streamCut);
+
+    /**
+     * Remove subscriber from list of Subscribers for the Stream.
+     * @param subscriber  subscriber to be removed.
+     * @return future of operation.
+     */
+    CompletableFuture<Void> removeSubscriber(final String subscriber);
 
     /**
      * Starts truncating an existing stream.
