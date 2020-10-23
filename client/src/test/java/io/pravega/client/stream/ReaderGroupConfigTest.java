@@ -92,7 +92,7 @@ public class ReaderGroupConfigTest {
                 .disableAutomaticCheckpoints()
                 .stream("scope/s1", getStreamCut("s1"))
                 .stream(Stream.of(SCOPE, "s2"), getStreamCut("s2"))
-                .isSubscriber()
+                .isSubscribedForRetention()
                 .build();
 
         assertEquals(-1, cfg.getAutomaticCheckpointIntervalMillis());
@@ -109,8 +109,8 @@ public class ReaderGroupConfigTest {
                 .disableAutomaticCheckpoints()
                 .stream("scope/s1", getStreamCut("s1"))
                 .stream(Stream.of(SCOPE, "s2"), getStreamCut("s2"))
-                .isSubscriber()
-                .autoTruncateAtLastCheckpoint()
+                .isSubscribedForRetention()
+                .autoPublishCheckpoint()
                 .build();
 
         assertEquals(-1, cfg.getAutomaticCheckpointIntervalMillis());
@@ -149,6 +149,16 @@ public class ReaderGroupConfigTest {
         assertEquals(3000L, cfg.getGroupRefreshTimeMillis());
         assertEquals(StreamCut.UNBOUNDED, cfg.getStartingStreamCuts().get(Stream.of("scope/s1")));
         assertEquals(getStreamCut("s2"), cfg.getStartingStreamCuts().get(Stream.of("scope/s2")));
+    }
+
+    @Test(expected = IllegalArgumentException.class)
+    public void testInValidAutoTruncateAtLastCheckpoint() {
+        ReaderGroupConfig.builder()
+                .disableAutomaticCheckpoints()
+                .stream("scope/s1", getStreamCut("s1"))
+                .stream(Stream.of(SCOPE, "s2"), getStreamCut("s2"))
+                .autoPublishCheckpoint()
+                .build();
     }
 
     @Test(expected = IllegalArgumentException.class)
