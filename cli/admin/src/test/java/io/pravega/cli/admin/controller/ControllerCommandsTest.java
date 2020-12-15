@@ -99,6 +99,7 @@ public class ControllerCommandsTest extends SecureControllerCommandsTest {
         assertTrue("Failed to create the stream ", isStreamCreated);
     }
 
+    @Override
     protected AdminCommandState cliConfig() {
         return STATE;
     }
