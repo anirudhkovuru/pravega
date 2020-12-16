@@ -14,16 +14,27 @@ import io.pravega.cli.admin.AdminCommandState;
 import io.pravega.cli.admin.CommandArgs;
 import io.pravega.cli.admin.Parser;
 import io.pravega.client.ClientConfig;
+import io.pravega.client.admin.ReaderGroupManager;
+import io.pravega.client.admin.StreamManager;
+import io.pravega.client.stream.ReaderGroupConfig;
+import io.pravega.client.stream.ScalingPolicy;
+import io.pravega.client.stream.StreamConfiguration;
 import io.pravega.client.stream.impl.DefaultCredentials;
 import io.pravega.test.common.SecurityConfigDefaults;
 import io.pravega.test.integration.demo.ClusterWrapper;
+import lombok.Cleanup;
 import lombok.SneakyThrows;
+import lombok.val;
 
 import java.io.ByteArrayOutputStream;
 import java.io.PrintStream;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.util.Properties;
+
+import static io.pravega.shared.NameUtils.getScopedStreamName;
+import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertTrue;
 
 /**
  * Class to contain convenient utilities for writing test cases.
@@ -108,6 +119,28 @@ public final class TestUtils {
         pravegaProperties.setProperty("cli.controller.connect.trustStore.location", pathToConfig() + SecurityConfigDefaults.TLS_CA_CERT_FILE_NAME);
         state.getConfigBuilder().include(pravegaProperties);
         return state;
+    }
+
+    public static void createScopedStream(ClientConfig clientConfig, String scope, String stream) {
+        @Cleanup
+        StreamManager streamManager = StreamManager.create(clientConfig);
+        assertNotNull(streamManager);
+        boolean isScopeCreated = streamManager.createScope(scope);
+        // Check if scope created successfully.
+        assertTrue("Failed to create scope", isScopeCreated);
+
+        boolean isStreamCreated = streamManager.createStream(scope, stream, StreamConfiguration.builder()
+                .scalingPolicy(ScalingPolicy.fixed(1))
+                .build());
+        // Check if stream created successfully.
+        assertTrue("Failed to create the stream ", isStreamCreated);
+    }
+
+    public static void createReaderGroup(ClientConfig clientConfig, String scope, String stream, String readerGroup) {
+        @Cleanup
+        val rgManager = ReaderGroupManager.withScope(scope, clientConfig);
+        val rgConfig = ReaderGroupConfig.builder().stream(getScopedStreamName(scope, stream)).build();
+        rgManager.createReaderGroup(readerGroup, rgConfig);
     }
 
     public static ClientConfig prepareValidClientConfig(String controllerUri, boolean authEnabled, boolean tlsEnabled) {

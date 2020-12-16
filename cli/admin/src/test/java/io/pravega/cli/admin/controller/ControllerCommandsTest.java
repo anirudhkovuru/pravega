@@ -16,12 +16,9 @@ import io.pravega.cli.admin.Parser;
 import io.pravega.cli.admin.utils.CLIControllerConfig;
 import io.pravega.cli.admin.utils.TestUtils;
 import io.pravega.client.ClientConfig;
-import io.pravega.client.admin.StreamManager;
 import io.pravega.client.connection.impl.ConnectionPool;
 import io.pravega.client.connection.impl.ConnectionPoolImpl;
 import io.pravega.client.connection.impl.SocketConnectionFactoryImpl;
-import io.pravega.client.stream.ScalingPolicy;
-import io.pravega.client.stream.StreamConfiguration;
 import io.pravega.client.stream.impl.DefaultCredentials;
 import io.pravega.common.Exceptions;
 import io.pravega.common.cluster.Host;
@@ -35,6 +32,7 @@ import io.pravega.controller.util.Config;
 import io.pravega.test.integration.demo.ClusterWrapper;
 import lombok.Cleanup;
 import lombok.SneakyThrows;
+import lombok.val;
 import org.apache.curator.framework.CuratorFramework;
 import org.apache.curator.framework.CuratorFrameworkFactory;
 import org.apache.curator.retry.RetryOneTime;
@@ -42,6 +40,7 @@ import org.junit.AfterClass;
 import org.junit.Assert;
 import org.junit.Test;
 
+import javax.ws.rs.core.Response;
 import java.io.ByteArrayOutputStream;
 import java.io.PrintStream;
 import java.net.URI;
@@ -58,11 +57,11 @@ import java.util.stream.IntStream;
 
 import static io.pravega.cli.admin.utils.TestUtils.createAdminCLIConfig;
 import static io.pravega.cli.admin.utils.TestUtils.createPravegaCluster;
+import static io.pravega.cli.admin.utils.TestUtils.createReaderGroup;
+import static io.pravega.cli.admin.utils.TestUtils.createScopedStream;
 import static io.pravega.cli.admin.utils.TestUtils.getCLIControllerRestUri;
 import static io.pravega.cli.admin.utils.TestUtils.getCLIControllerUri;
 import static io.pravega.cli.admin.utils.TestUtils.prepareValidClientConfig;
-import static org.junit.Assert.assertNotNull;
-import static org.junit.Assert.assertTrue;
 
 /**
  * Validate basic controller commands.
@@ -77,30 +76,24 @@ public class ControllerCommandsTest extends SecureControllerCommandsTest {
         CLUSTER.start();
         STATE = createAdminCLIConfig(getCLIControllerRestUri(CLUSTER.controllerRestUri()),
                 getCLIControllerUri(CLUSTER.controllerUri()), CLUSTER.zookeeperConnectString(), CLUSTER.getContainerCount(), false, false);
-        String scope = "testScope";
-        String testStream = "testStream";
-        ClientConfig clientConfig = prepareValidClientConfig(CLUSTER.controllerUri(), false, false);
-
-        // Generate the scope and stream required for testing.
-        @Cleanup
-        StreamManager streamManager = StreamManager.create(clientConfig);
-        assertNotNull(streamManager);
-
-        boolean isScopeCreated = streamManager.createScope(scope);
-
-        // Check if scope created successfully.
-        assertTrue("Failed to create scope", isScopeCreated);
-
-        boolean isStreamCreated = streamManager.createStream(scope, testStream, StreamConfiguration.builder()
-                .scalingPolicy(ScalingPolicy.fixed(1))
-                .build());
-
-        // Check if stream created successfully.
-        assertTrue("Failed to create the stream ", isStreamCreated);
     }
 
+    @Override
     protected AdminCommandState cliConfig() {
         return STATE;
+    }
+
+    @Override
+    protected void createScopeAndStream(String scope, String stream) {
+        ClientConfig clientConfig = prepareValidClientConfig(CLUSTER.controllerUri(), false, false);
+        // Generate the scope and stream required for testing.
+        createScopedStream(clientConfig, scope, stream);
+    }
+
+    @Override
+    protected void createScopedReaderGroup(String scope, String stream, String readerGroup) {
+        ClientConfig clientConfig = prepareValidClientConfig(CLUSTER.controllerUri(), false, false);
+        createReaderGroup(clientConfig, scope, stream, readerGroup);
     }
 
     @AfterClass
@@ -115,16 +108,51 @@ public class ControllerCommandsTest extends SecureControllerCommandsTest {
     @SneakyThrows
     public void testDescribeReaderGroupCommand() {
         // Check that the system reader group can be listed.
-        String commandResult = TestUtils.executeCommand("controller describe-readergroup _system commitStreamReaders", cliConfig());
-        Assert.assertTrue(commandResult.contains("commitStreamReaders"));
+        String scope = "describeReaderGroup";
+        String stream = "describeReaderGroupStream";
+        String readerGroup = "describeReaderGroupRG";
+        createScopeAndStream(scope, stream);
+        createScopedReaderGroup(scope, stream, readerGroup);
+        String commandResult = TestUtils.executeCommand(String.format("controller describe-readergroup %s %s", scope, readerGroup), cliConfig());
+        Assert.assertTrue(commandResult.contains(readerGroup));
         Assert.assertNotNull(ControllerDescribeReaderGroupCommand.descriptor());
     }
 
     @Test
     @SneakyThrows
+    public void testAuthConfig() {
+        String scope = "authConfig";
+        String stream = "authConfigStream";
+        createScopeAndStream(scope, stream);
+        Properties pravegaProperties = new Properties();
+        pravegaProperties.setProperty("cli.controller.connect.channel.auth", "true");
+        pravegaProperties.setProperty("cli.controller.connect.credentials.username", "admin");
+        pravegaProperties.setProperty("cli.controller.connect.credentials.pwd", "1111_aaaa");
+        cliConfig().getConfigBuilder().include(pravegaProperties);
+        String commandResult = TestUtils.executeCommand("controller list-scopes", cliConfig());
+        // Check that both the new scope and the system one exist.
+        Assert.assertTrue(commandResult.contains("_system"));
+        Assert.assertTrue(commandResult.contains(scope));
+        Assert.assertNotNull(ControllerListScopesCommand.descriptor());
+        // Restore config
+        pravegaProperties.setProperty("cli.controller.connect.channel.auth", "false");
+        cliConfig().getConfigBuilder().include(pravegaProperties);
+
+        // Exercise response codes for REST requests.
+        @Cleanup
+        val c1 = new AdminCommandState();
+        CommandArgs commandArgs = new CommandArgs(Collections.emptyList(), c1);
+        ControllerListScopesCommand command = new ControllerListScopesCommand(commandArgs);
+        command.printResponseInfo(Response.status(Response.Status.UNAUTHORIZED).build());
+        command.printResponseInfo(Response.status(Response.Status.INTERNAL_SERVER_ERROR).build());
+    }
+
+    @Test
+    @SneakyThrows
     public void testDescribeStreamCommand() {
-        String scope = "testScope";
-        String testStream = "testStream";
+        String scope = "describeStream";
+        String testStream = "describeStreamStream";
+        createScopeAndStream(scope, testStream);
 
         String commandResult = executeCommand("controller describe-stream " + scope + " " + testStream, cliConfig());
         Assert.assertTrue(commandResult.contains("stream_config"));
