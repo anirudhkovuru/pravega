@@ -20,6 +20,8 @@ import io.pravega.client.EventStreamClientFactory;
 import io.pravega.client.admin.ReaderGroupManager;
 import io.pravega.client.admin.StreamManager;
 import io.pravega.client.control.impl.Controller;
+import io.pravega.client.control.impl.ControllerImpl;
+import io.pravega.client.control.impl.ControllerImplConfig;
 import io.pravega.client.stream.EventRead;
 import io.pravega.client.stream.EventStreamReader;
 import io.pravega.client.stream.EventStreamWriter;
@@ -27,13 +29,18 @@ import io.pravega.client.stream.EventWriterConfig;
 import io.pravega.client.stream.ReaderConfig;
 import io.pravega.client.stream.ReaderGroup;
 import io.pravega.client.stream.ReaderGroupConfig;
+import io.pravega.client.stream.RetentionPolicy;
+import io.pravega.client.stream.ScalingPolicy;
 import io.pravega.client.stream.Stream;
+import io.pravega.client.stream.StreamConfiguration;
 import io.pravega.client.stream.StreamCut;
 import io.pravega.client.stream.impl.JavaSerializer;
+import io.pravega.client.stream.impl.StreamImpl;
 import io.pravega.common.Exceptions;
 import io.pravega.common.concurrent.ExecutorServiceHelpers;
 import io.pravega.common.concurrent.Futures;
 import io.pravega.common.hash.RandomFactory;
+import io.pravega.test.common.AssertExtensions;
 import io.pravega.test.system.framework.Environment;
 import io.pravega.test.system.framework.SystemTestRunner;
 import io.pravega.test.system.framework.Utils;
@@ -58,6 +65,7 @@ import java.util.stream.Collectors;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
 
 @Slf4j
 @RunWith(SystemTestRunner.class)
@@ -71,6 +79,7 @@ public class MultiControllerCBRTest extends AbstractSystemTest {
     private static final int MAX = 300;
     private static final int MIN = 30;
 
+    private final AtomicReference<URI> controllerURIDirect = new AtomicReference<>();
     private final ReaderConfig readerConfig = ReaderConfig.builder().build();
     private final ScheduledExecutorService executor = ExecutorServiceHelpers.newScheduledThreadPool(4, "executor");
     private final ScheduledExecutorService streamCutExecutor = ExecutorServiceHelpers.newScheduledThreadPool(1, "streamCutExecutor");
@@ -79,7 +88,6 @@ public class MultiControllerCBRTest extends AbstractSystemTest {
 
     private Service controllerService = null;
     private Service segmentStoreService = null;
-    private AtomicReference<URI> controllerURIDirect = new AtomicReference<>();
 
     @Environment
     public static void initialize() throws MarathonException, ExecutionException {
@@ -121,11 +129,27 @@ public class MultiControllerCBRTest extends AbstractSystemTest {
         segmentStoreService = Utils.createPravegaSegmentStoreService(zkUris.get(0), controllerService.getServiceDetails().get(0));
     }
 
+    @Before
+    public void setup() {
+        final ClientConfig clientConfig = Utils.buildClientConfig(controllerURIDirect.get());
+
+        controller = new ControllerImpl(ControllerImplConfig.builder()
+                .clientConfig(clientConfig)
+                .maxBackoffMillis(5000).build(), executor);
+        streamManager = StreamManager.create(clientConfig);
+
+        assertTrue("Creating scope", streamManager.createScope(SCOPE));
+        assertTrue("Creating stream", streamManager.createStream(SCOPE, STREAM,
+                StreamConfiguration.builder()
+                        .scalingPolicy(ScalingPolicy.fixed(1))
+                        .retentionPolicy(RetentionPolicy.bySizeBytes(MIN, MAX)).build()));
+    }
+
     @After
     public void tearDown() {
+        streamManager.close();
         ExecutorServiceHelpers.shutdown(executor);
-        // The test scales down the controller instances to 0.
-        // Scale down the segment store instances to 0 to ensure the next tests start with a clean slate.
+        controllerService.scaleService(0);
         segmentStoreService.scaleService(0);
     }
 
@@ -165,5 +189,44 @@ public class MultiControllerCBRTest extends AbstractSystemTest {
         // Wait for 5 seconds to force reader group state update.
         Exceptions.handleInterrupted(() -> TimeUnit.SECONDS.sleep(5));
         EventRead<String> emptyEvent = reader.readNextEvent(100);
+        assertTrue("Stream-cut generation did not complete", Futures.await(futureCuts, 10_000));
+
+        Map<Stream, StreamCut> streamCuts = futureCuts.join();
+        log.info("{} updating its retention stream-cut to {}", READER_GROUP, streamCuts);
+        readerGroup.updateRetentionStreamCut(streamCuts);
+
+        // Write two more events.
+        log.info("Writing event e2 to {}/{}", SCOPE, STREAM);
+        writer.writeEvent("e2", "data of size 30").join();
+        log.info("Writing event e3 to {}/{}", SCOPE, STREAM);
+        writer.writeEvent("e3", "data of size 30").join();
+
+        // Check to make sure truncation happened after the first event.
+        AssertExtensions.assertEventuallyEquals(true, () -> controller.getSegmentsAtTime(
+                new StreamImpl(SCOPE, STREAM), 0L).join().values().stream().anyMatch(off -> off >= 30),
+                5 * 60 * 1000L);
+
+        // Read next event.
+        log.info("Reading event e2 from {}/{}", SCOPE, STREAM);
+        read = reader.readNextEvent(READ_TIMEOUT);
+        assertFalse(read.isCheckpoint());
+        assertEquals("data of size 30", read.getEvent());
+
+        // Update the retention stream-cut.
+        log.info("{} generating stream-cuts for {}/{}", READER_GROUP, SCOPE, STREAM);
+        CompletableFuture<Map<Stream, StreamCut>> futureCuts2 = readerGroup.generateStreamCuts(streamCutExecutor);
+        // Wait for 5 seconds to force reader group state update.
+        Exceptions.handleInterrupted(() -> TimeUnit.SECONDS.sleep(5));
+        EventRead<String> emptyEvent2 = reader.readNextEvent(100);
+        assertTrue("Stream-cut generation did not complete", Futures.await(futureCuts2, 10_000));
+
+        Map<Stream, StreamCut> streamCuts2 = futureCuts2.join();
+        log.info("{} updating its retention stream-cut to {}", READER_GROUP, streamCuts2);
+        readerGroup.updateRetentionStreamCut(streamCuts2);
+
+        // Check to make sure truncation happened after the second event.
+        AssertExtensions.assertEventuallyEquals(true, () -> controller.getSegmentsAtTime(
+                new StreamImpl(SCOPE, STREAM), 0L).join().values().stream().anyMatch(off -> off >= 60),
+                5 * 60 * 1000L);
     }
 }
